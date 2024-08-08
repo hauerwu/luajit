@@ -15,6 +15,8 @@ extern lua_State*	newstate(void);
 extern int			load(lua_State*, void*, const char*);
 extern int			dump(lua_State*, void*);
 extern void		pushclosure(lua_State*, int);
+
+
 */
 import "C"
 import (
@@ -44,31 +46,32 @@ import (
 // As an example, the following function receives a variable number of
 // numerical arguments and returns their average and sum:
 //
-// 	func foo(s *luajit.State) int {
-// 		n := s.Gettop()		// number of arguments
-// 		sum := 0.0
-// 		for i := 1; i <= n; i++ {
-// 			if !s.Isnumber(i) {
-// 				s.Pushstring("incorrect argument")
-// 				s.Error()
-// 			}
-// 			sum += s.Tonumber(i)
-// 		}
-// 		s.Pushnumber(sum/n)	// first result
-// 		s.Pushnumber(sum)	// second result
-// 		return 2		// number of results
-// 	}
+//	func foo(s *luajit.State) int {
+//		n := s.Gettop()		// number of arguments
+//		sum := 0.0
+//		for i := 1; i <= n; i++ {
+//			if !s.Isnumber(i) {
+//				s.Pushstring("incorrect argument")
+//				s.Error()
+//			}
+//			sum += s.Tonumber(i)
+//		}
+//		s.Pushnumber(sum/n)	// first result
+//		s.Pushnumber(sum)	// second result
+//		return 2		// number of results
+//	}
 type Gofunction func(*State) int
 
 // A State keeps all state of a LuaJIT interpreter.
 type State struct {
-	l *C.lua_State
+	l   *C.lua_State
+	fps []*Gofunction
 }
 
 // Creates & initializes a new State and returns a pointer to it. Returns
 // nil on error.
 func Newstate() *State {
-	s := &State{C.newstate()}
+	s := &State{l: C.newstate()}
 	s.Newtable()
 	s.Setglobal(namehooks)
 	return s
@@ -269,7 +272,9 @@ func (s *State) Gettop() int {
 
 //export goreadchunk
 func goreadchunk(reader, buf unsafe.Pointer, buflen C.size_t) int {
-	r := (*bufio.Reader)(reader)
+	pptr := (*uintptr)(reader)
+	ptr := *pptr
+	r := (*bufio.Reader)(unsafe.Pointer(ptr))
 	cb := (*C.char)(buf)
 	leng := int(buflen)
 	var b []byte
@@ -282,7 +287,7 @@ func goreadchunk(reader, buf unsafe.Pointer, buflen C.size_t) int {
 	for i = 0; i < leng; i++ {
 		bb, err := r.ReadByte()
 		b[i] = bb
-		if bb < 1 || err != nil {
+		if err != nil {
 			break
 		}
 	}
@@ -303,7 +308,9 @@ func goreadchunk(reader, buf unsafe.Pointer, buflen C.size_t) int {
 func (s *State) Load(chunk *bufio.Reader, chunkname string) error {
 	cs := C.CString(chunkname)
 	defer C.free(unsafe.Pointer(cs))
-	r := int(C.load(s.l, unsafe.Pointer(chunk), (*C.char)(unsafe.Pointer(cs))))
+	ptr := uintptr(unsafe.Pointer(chunk))
+	pptr := &ptr
+	r := int(C.load(s.l, unsafe.Pointer(pptr), (*C.char)(unsafe.Pointer(cs))))
 	return numtoerror(r)
 }
 
@@ -328,6 +335,13 @@ func (s *State) Loadfile(filename string) error {
 	return numtoerror(r)
 }
 
+func (s *State) LoadBuffer(data []byte, chunkname string) error {
+	cs := C.CString(chunkname)
+	defer C.free(unsafe.Pointer(cs))
+	r := int(C.luaL_loadbuffer(s.l, (*C.char)(unsafe.Pointer(&data[0])), C.size_t(len(data)), cs))
+	return numtoerror(r)
+}
+
 // Creates a new empty table and pushes it onto the stack. The new table
 // has space pre-allocated for narr array elements and nrec non-array
 // elements. This pre-allocation is useful when you know exactly how many
@@ -347,17 +361,17 @@ func (s *State) Newtable() {
 // no more elements in the table, then Next returns 0 (and pushes nothing).
 //
 // A typical traversal looks like this:
-// 	// table is in the stack at index 't'
-// 	s.Pushnil()	// first key
-// 	for s.Next(t) != 0 {
-// 		// use key (at index -2) and value (index -1)
-// 		fmt.Printf("%s - %s\n",
-// 			s.Typename(s.Type(-2)),
-// 			s.Typename(s.Type(-1)))
-// 		// remove value, keep key for next iteration
-// 		s.Pop(1)
-// 	}
 //
+//	// table is in the stack at index 't'
+//	s.Pushnil()	// first key
+//	for s.Next(t) != 0 {
+//		// use key (at index -2) and value (index -1)
+//		fmt.Printf("%s - %s\n",
+//			s.Typename(s.Type(-2)),
+//			s.Typename(s.Type(-1)))
+//		// remove value, keep key for next iteration
+//		s.Pop(1)
+//	}
 func (s *State) Next(index int) int {
 	return int(C.lua_next(s.l, C.int(index)))
 }
@@ -371,7 +385,7 @@ func (s *State) Next(index int) int {
 // are subject to garbage collection, like any Lua object.
 func (s *State) Newthread() *State {
 	l := C.lua_newthread(s.l)
-	return &State{l}
+	return &State{l: l}
 }
 
 // void *lua_newuserdata (lua_State *L, size_t size);
@@ -571,7 +585,7 @@ func (s *State) Pushboolean(b bool) {
 //export docallback
 func docallback(fp, sp unsafe.Pointer) int {
 	fn := *(*func(*State) int)(fp)
-	state := State{((*C.lua_State)(sp))}
+	state := State{l: ((*C.lua_State)(sp))}
 	return fn(&state)
 }
 
@@ -588,7 +602,9 @@ func docallback(fp, sp unsafe.Pointer) int {
 //
 // The maximum value for n is 254.
 func (s *State) Pushclosure(fn Gofunction, n int) {
-	C.lua_pushlightuserdata(s.l, unsafe.Pointer(&fn))
+	fp := &fn
+	s.fps = append(s.fps, fp) // keep a reference to the function
+	C.lua_pushlightuserdata(s.l, unsafe.Pointer(fp))
 	C.pushclosure(s.l, C.int(n))
 }
 
@@ -824,7 +840,7 @@ func (s *State) Tothread(index int) *State {
 	if t == nil {
 		return nil
 	}
-	return &State{t}
+	return &State{l: t}
 }
 
 // If the value at the given valid index is a full userdata, returns
@@ -861,7 +877,8 @@ func (to *State) Xmove(from *State, n int) {
 //
 // This function should only be called as the return expression of a Go
 // function, as follows:
-// 	return s.Yield(nresults)
+//
+//	return s.Yield(nresults)
 //
 // When a Go function calls Yield in that way, the running coroutine
 // suspends its execution, and the call to Resume that started this coroutine

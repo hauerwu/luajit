@@ -119,26 +119,25 @@ func (ar *Debug) update() {
 // function in the top of the stack.) For instance, to know in which line
 // a function f was defined, you can write the following code:
 //
-// 	d := luajit.Newdebug(s)
-// 	s.Getfield(luajit.Globalsindex, "f")  // get global 'f'
-// 	d.Getinfo(">S")
-// 	fmt.Printf("%d\n", d.Linedefined);
+//	d := luajit.Newdebug(s)
+//	s.Getfield(luajit.Globalsindex, "f")  // get global 'f'
+//	d.Getinfo(">S")
+//	fmt.Printf("%d\n", d.Linedefined);
 //
 // Each character in the string what selects some fields of the structure
 // ar to be filled or a value to be pushed on the stack:
 //
-// 	'n'	fills in the field Name and Namewhat
-// 	'S'	fills in the fields Source, Shortsrc, Linedefined,
-// 		Lastlinedefined, and What
-// 	'l'	fills in the field Currentline
-// 	'u'	fills in the field Nups
-// 	'f'	pushes onto the stack the function that is running at the
-// 		given level
-// 	'L'	pushes onto the stack a table whose indices are the numbers of
-// 		the lines that are valid on the function. (A valid line is a line
-// 		with some associated code, that is, a line where you can put a break
-// 		point. Invalid lines include empty lines and comments.)
-//
+//	'n'	fills in the field Name and Namewhat
+//	'S'	fills in the fields Source, Shortsrc, Linedefined,
+//		Lastlinedefined, and What
+//	'l'	fills in the field Currentline
+//	'u'	fills in the field Nups
+//	'f'	pushes onto the stack the function that is running at the
+//		given level
+//	'L'	pushes onto the stack a table whose indices are the numbers of
+//		the lines that are valid on the function. (A valid line is a line
+//		with some associated code, that is, a line where you can put a break
+//		point. Invalid lines include empty lines and comments.)
 func (d *Debug) Getinfo(what string) error {
 	cs := C.CString(what)
 	defer C.free(unsafe.Pointer(cs))
@@ -188,7 +187,7 @@ func (d *Debug) Getstack(level int) error {
 
 //export hookevent
 func hookevent(cs unsafe.Pointer, car unsafe.Pointer) {
-	s := State{(*C.lua_State)(cs)}
+	s := State{l: (*C.lua_State)(cs)}
 	ar := Debug{d: (*C.lua_Debug)(car)}
 	ar.update()
 
